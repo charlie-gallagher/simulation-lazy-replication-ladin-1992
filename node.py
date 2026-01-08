@@ -3,6 +3,7 @@ from service import Totaler
 import dataclasses
 import datetime
 import random
+from copy import deepcopy
 
 @dataclasses.dataclass
 class ProcedureCall:
@@ -89,7 +90,7 @@ class UpdateQueue:
 
 class QueryQueue:
     def __init__(self, capacity: int = 500) -> None:
-        self._queue: List[QueryInfo] = []
+        self._queue: List[Tuple[int, MultiPartTimestamp]] = []
         self.capacity = capacity
 
     def __len__(self):
@@ -99,12 +100,14 @@ class QueryQueue:
     def size(self):
         return len(self._queue)
 
-    def push(self, q: QueryInfo) -> None:
+    def push(self, q: MultiPartTimestamp) -> int:
         if self.size >= self.capacity:
             raise QueueFullException("Queue is full")
-        self._queue.append(q)
+        uid = random.randint(0, 10000)
+        self._queue.append((uid, q))
+        return uid
 
-    def pop(self) -> QueryInfo:
+    def pop(self) -> Tuple[int, MultiPartTimestamp]:
         return self._queue.pop()
 
 @dataclasses.dataclass
@@ -126,6 +129,7 @@ class Node:
     gossip_queue: GossipQueue
     update_queue: UpdateQueue
     query_queue: QueryQueue
+    query_results: List[Tuple[int, Totaler]] = dataclasses.field(default_factory=list)
 
     def __post_init__(self):
         self.ts_table[self.id] = self.rep_ts
@@ -140,6 +144,8 @@ class Node:
         print(f"  Gossip queue length: {len(self.gossip_queue)}")
         print(f"  Update queue length: {len(self.update_queue)}")
         print(f"  Query queue length: {len(self.query_queue)}")
+        print(f"  Query results length: {len(self.query_results)}")
+
 
     def clear_update_queue(self) -> None:
         while True:
@@ -163,6 +169,16 @@ class Node:
             ts.set(self.id, current_rep_ts)
             self.val_ts = self.val_ts.merge(ts)
 
+    def clear_query_queue(self) -> None:
+        while True:
+            if len(self.query_queue) == 0:
+                break
+            # For now, remove all queue elements and write val to results
+            uid, ts = self.query_queue.pop()
+            self.query_results.append((uid, self.val))
+
+    def ack_query_result(self, id: int) -> None:
+        self.query_results = [x for x in self.query_results if x[0] != id]
 
     def process_update(self, update: UpdateInfo) -> Any:
         pass
@@ -178,11 +194,30 @@ class FrontEnd:
         self.preferred_node = None
         self.prev = None
         self.n_nodes = -1
+        # Values seen so far (after successful polling)
+        self.seen_vals = []
+        # If True, waits for polling to complete
+        self.blocked = False
+        # A UID to poll self.preferred_node for
+        self.poll_id = None
+        # Current number of poll attempts
+        self.poll_attempts = 0
+        # Max attempts before giving up on a query
+        self.max_poll_attempts = 5
+        self.stats = {"updates": 0, "query_starts": 0, "query_completes": 0, "failed_polls": 0}
+
+    @property
+    def last_seen_val(self) -> Totaler:
+        return self.seen_vals[-1] if self.seen_vals else None
 
     def summarize(self) -> None:
         print(f"FrontEnd ({self.id})")
         print(f"  Preferred node: {self.preferred_node.id}")
         print(f"  Prev: {self.prev}")
+        print(f"  Is blocked: {self.blocked}")
+        print(f"  Last received value: {self.last_seen_val}")
+        print(f"  Seen vals: {self.seen_vals}")
+        print(f"  Stats: {self.stats}")
 
     def choose_node(self, nodes: List[Node]) -> None:
         self.nodes = nodes
@@ -210,7 +245,34 @@ class FrontEnd:
             return False
         # TODO: What should this format be?
         self.preferred_node.update_queue.push((chosen_call, self.prev))
+        self.stats["updates"] += 1
         return True
+
+    def query_val(self) -> None:
+        self.stats["query_starts"] += 1
+        self.poll_id = self.preferred_node.query_queue.push(self.prev)
+        self.blocked = True
+
+    def poll_for_val(self) -> bool:
+        self.poll_attempts += 1
+        if self.poll_attempts > self.max_poll_attempts:
+            self.stats["failed_polls"] += 1
+            self._clear_poll_state()
+
+        for id, val in self.preferred_node.query_results:
+            if self.poll_id == id:
+                self.seen_vals.append(deepcopy(val))
+                self.preferred_node.ack_query_result(self.poll_id)
+                self.stats["query_completes"] += 1
+                self._clear_poll_state()
+                return
+
+    def _clear_poll_state(self) -> None:
+        self.poll_id = None
+        self.blocked = False
+        self.poll_attempts = 0
+
+
         
 
 
@@ -234,7 +296,7 @@ class Cluster:
         print(f"  Nodes: {n_nodes}")
         print(f"  Front ends: {n_fe}")
         print(f"  Current time: {self.t}")
-        print(self.stats)
+        print(f"  Stats: {self.stats}")
         print("--------------------------")
         for fe in self.front_ends:
             fe.summarize()
@@ -247,11 +309,18 @@ class Cluster:
         for i in range(n_ticks):
             self.t = i
             for fe in self.front_ends:
-                if fe.update_val():
-                    self.stats["updates"] += 1
-                fe.choose_new_node()
+                if fe.blocked:
+                    fe.poll_for_val()
+                    # Bugfix: only choose new node after finishing work
+                    #         with current node
+                    fe.choose_new_node()
+                else:
+                    if fe.update_val():
+                        self.stats["updates"] += 1
+                    fe.query_val()
             for be in self.nodes:
                 be.clear_update_queue()
+                be.clear_query_queue()
 
 
 # Runtime stuff ------------------------------------------------------
