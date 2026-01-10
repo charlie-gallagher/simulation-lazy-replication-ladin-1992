@@ -1,7 +1,9 @@
 from typing import List
 
+
 def new_timestamp(n_replicas: int) -> "MultiPartTimestamp":
     return MultiPartTimestamp([0] * n_replicas)
+
 
 class MultiPartTimestamp:
     def __init__(self, parts: List[int]) -> None:
@@ -9,7 +11,7 @@ class MultiPartTimestamp:
 
     def __repr__(self):
         return str(self.parts)
-    
+
     def __str__(self):
         return str(self.parts)
 
@@ -28,7 +30,9 @@ class MultiPartTimestamp:
 
     def __lt__(self, other) -> bool:
         if other.__class__ is self.__class__:
-            return all([x <= y for x, y in zip(self.parts, other.parts)]) and any([x < y for x,  y in zip(self.parts, other.parts)])
+            return all([x <= y for x, y in zip(self.parts, other.parts)]) and any(
+                [x < y for x, y in zip(self.parts, other.parts)]
+            )
         raise NotImplementedError()
 
     def __le__(self, other) -> bool:
@@ -38,7 +42,9 @@ class MultiPartTimestamp:
 
     def __gt__(self, other) -> bool:
         if other.__class__ is self.__class__:
-            return all([x >= y for x, y in zip(self.parts, other.parts)]) and any([x > y for x,  y in zip(self.parts, other.parts)])
+            return all([x >= y for x, y in zip(self.parts, other.parts)]) and any(
+                [x > y for x, y in zip(self.parts, other.parts)]
+            )
         raise NotImplementedError()
 
     def __ge__(self, other) -> bool:
@@ -57,7 +63,9 @@ class MultiPartTimestamp:
 
     def merge(self, other: "MultiPartTimestamp") -> "MultiPartTimestamp":
         """Merge timestamps by taking the component-wise maximum"""
-        return MultiPartTimestamp([max([x, y]) for x, y in zip(self.parts, other.parts)])
+        return MultiPartTimestamp(
+            [max([x, y]) for x, y in zip(self.parts, other.parts)]
+        )
 
     def copy(self) -> "MultiPartTimestamp":
         return MultiPartTimestamp(self.parts.copy())
@@ -87,4 +95,3 @@ class MultiPartTimestamp:
         if not less and not greater:
             return 0
         return None  # concurrent
-

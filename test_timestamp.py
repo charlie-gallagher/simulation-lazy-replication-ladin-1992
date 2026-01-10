@@ -1,6 +1,7 @@
 import unittest
 from timestamp import new_timestamp, MultiPartTimestamp
 
+
 class TimestampTestCase(unittest.TestCase):
     def test_create_timestamp(self):
         n = 5
@@ -19,9 +20,21 @@ class TimestampTestCase(unittest.TestCase):
 
     def test_merge(self):
         cases = {
-            "x_gt_y": (MultiPartTimestamp([1, 2, 3]), MultiPartTimestamp([1, 1, 1]), MultiPartTimestamp([1, 2, 3])),
-            "y_gt_x": (MultiPartTimestamp([1, 1, 1]), MultiPartTimestamp([1, 2, 3]), MultiPartTimestamp([1, 2, 3])),
-            "x_eq_y": (MultiPartTimestamp([1, 2, 3]), MultiPartTimestamp([1, 2, 3]), MultiPartTimestamp([1, 2, 3])),
+            "x_gt_y": (
+                MultiPartTimestamp([1, 2, 3]),
+                MultiPartTimestamp([1, 1, 1]),
+                MultiPartTimestamp([1, 2, 3]),
+            ),
+            "y_gt_x": (
+                MultiPartTimestamp([1, 1, 1]),
+                MultiPartTimestamp([1, 2, 3]),
+                MultiPartTimestamp([1, 2, 3]),
+            ),
+            "x_eq_y": (
+                MultiPartTimestamp([1, 2, 3]),
+                MultiPartTimestamp([1, 2, 3]),
+                MultiPartTimestamp([1, 2, 3]),
+            ),
         }
         for desc, parts in cases.items():
             with self.subTest(desc):
@@ -31,13 +44,28 @@ class TimestampTestCase(unittest.TestCase):
                 got = x.merge(y)
                 self.assertEqual(want, got)
 
-
     def test_comparisons(self):
         cases = {
-            "x_gt_y": (self.assertGreater, MultiPartTimestamp([1, 2, 3]), MultiPartTimestamp([1, 1, 1])),
-            "x_lt_y": (self.assertLess, MultiPartTimestamp([1, 1, 3]), MultiPartTimestamp([1, 2, 3])),
-            "x_eq_y": (self.assertEqual, MultiPartTimestamp([1, 1, 3]), MultiPartTimestamp([1, 1, 3])),
-            "x_ne_y": (self.assertNotEqual, MultiPartTimestamp([0, 1, 5]), MultiPartTimestamp([1, 2, 3])),
+            "x_gt_y": (
+                self.assertGreater,
+                MultiPartTimestamp([1, 2, 3]),
+                MultiPartTimestamp([1, 1, 1]),
+            ),
+            "x_lt_y": (
+                self.assertLess,
+                MultiPartTimestamp([1, 1, 3]),
+                MultiPartTimestamp([1, 2, 3]),
+            ),
+            "x_eq_y": (
+                self.assertEqual,
+                MultiPartTimestamp([1, 1, 3]),
+                MultiPartTimestamp([1, 1, 3]),
+            ),
+            "x_ne_y": (
+                self.assertNotEqual,
+                MultiPartTimestamp([0, 1, 5]),
+                MultiPartTimestamp([1, 2, 3]),
+            ),
         }
         for desc, parts in cases.items():
             with self.subTest(desc):
@@ -56,8 +84,16 @@ class TimestampTestCase(unittest.TestCase):
     def test_compare(self):
         cases = {
             "x_gt_y": (MultiPartTimestamp([1, 2, 3]), MultiPartTimestamp([1, 1, 1]), 1),
-            "x_lt_y": (MultiPartTimestamp([1, 1, 3]), MultiPartTimestamp([1, 2, 3]), -1),
-            "x_concurrent_with_y": (MultiPartTimestamp([0, 1, 5]), MultiPartTimestamp([1, 2, 3]), None),
+            "x_lt_y": (
+                MultiPartTimestamp([1, 1, 3]),
+                MultiPartTimestamp([1, 2, 3]),
+                -1,
+            ),
+            "x_concurrent_with_y": (
+                MultiPartTimestamp([0, 1, 5]),
+                MultiPartTimestamp([1, 2, 3]),
+                None,
+            ),
         }
         for desc, parts in cases.items():
             with self.subTest(desc):
@@ -66,5 +102,3 @@ class TimestampTestCase(unittest.TestCase):
                 want = parts[2]
                 got = x.compare(y)
                 self.assertEqual(want, got)
-
-

@@ -1,14 +1,15 @@
-from timestamp import new_timestamp, MultiPartTimestamp
+from timestamp import MultiPartTimestamp
 from service import Totaler
 import dataclasses
-import datetime
 import random
 from copy import deepcopy
+from typing import List, Tuple, Any
+
 
 @dataclasses.dataclass
 class ProcedureCall:
-        name: str
-        args: dict
+    name: str
+    args: dict
 
 
 @dataclasses.dataclass
@@ -21,14 +22,14 @@ class OperationInfo:
 
 
 @dataclasses.dataclass
-class UpdateInfo(OperationInfo):
-    prev: MultiPartTimestamp
-    op: ProcedureCall
+class AckInfo(OperationInfo):
+    pass
 
 
 @dataclasses.dataclass
-class AckInfo(OperationInfo):
-    pass
+class UpdateInfo(OperationInfo):
+    prev: MultiPartTimestamp
+    op: ProcedureCall
 
 
 @dataclasses.dataclass
@@ -52,7 +53,7 @@ class GossipQueue:
 
     def __len__(self):
         return len(self._queue)
-    
+
     @property
     def size(self):
         return len(self._queue)
@@ -65,6 +66,7 @@ class GossipQueue:
     def pop(self) -> Record:
         return self._queue.pop()
 
+
 class UpdateQueue:
     def __init__(self, capacity: int = 500) -> None:
         self._queue: List[Tuple] = []
@@ -72,7 +74,7 @@ class UpdateQueue:
 
     def __len__(self):
         return len(self._queue)
-    
+
     @property
     def size(self):
         return len(self._queue)
@@ -85,6 +87,7 @@ class UpdateQueue:
     def pop(self) -> UpdateInfo:
         return self._queue.pop()
 
+
 class QueryQueue:
     def __init__(self, capacity: int = 500) -> None:
         self._queue: List[Tuple[int, MultiPartTimestamp]] = []
@@ -92,7 +95,7 @@ class QueryQueue:
 
     def __len__(self):
         return len(self._queue)
-    
+
     @property
     def size(self):
         return len(self._queue)
@@ -106,6 +109,7 @@ class QueryQueue:
 
     def pop(self) -> Tuple[int, MultiPartTimestamp]:
         return self._queue.pop()
+
 
 @dataclasses.dataclass
 class Node:
@@ -134,6 +138,11 @@ class Node:
     def summarize(self) -> None:
         print(f"Node ({self.id})")
         print(f"  Log records: {len(self.log)}")
+        print("  First 5 log records:")
+        records_to_print = self.log[:5] if len(self.log) >= 5 else self.log
+        for r in records_to_print:
+            print("    " + str(r))
+
         print(f"  Replica TS: {self.rep_ts}")
         print(f"  Value: {self.val}")
         print(f"  Value TS: {self.val_ts}")
@@ -143,7 +152,6 @@ class Node:
         print(f"  Query queue length: {len(self.query_queue)}")
         print(f"  Query results length: {len(self.query_results)}")
 
-
     def clear_update_queue(self) -> None:
         while True:
             if len(self.update_queue) == 0:
@@ -152,15 +160,22 @@ class Node:
                 "add": self.val.add,
                 "subtract": self.val.subtract,
                 "incr": self.val.incr,
-                "decr": self.val.decr
+                "decr": self.val.decr,
             }
             update_info = self.update_queue.pop()
             op = op_map[update_info.op.name]
             kwargs = update_info.op.args or {}
             op(**kwargs)
+            # Increment self timestamp
             self.rep_ts.incr(self.id)
+            # Update u.prev's timestamp for this node using self.rep_ts.get(self.id)
             current_rep_ts = self.rep_ts.get(self.id)
             update_info.prev.set(self.id, current_rep_ts)
+            # Create a record and save it in the log
+            self.log.append(
+                Record(msg=update_info, rnode=self.id, ts=update_info.prev.copy())
+            )
+            # Set the timestamp for the value by merging u.prev and val_ts
             self.val_ts = self.val_ts.merge(update_info.prev)
 
     def clear_query_queue(self) -> None:
@@ -174,13 +189,6 @@ class Node:
     def ack_query_result(self, id: int) -> None:
         self.query_results = [x for x in self.query_results if x[0] != id]
 
-    def process_update(self, update: UpdateInfo) -> Any:
-        pass
-
-
-    def process_query(self, query: QueryInfo) -> Any:
-        # TODO: implement QueryInfo
-        pass
 
 class FrontEnd:
     def __init__(self, id: int):
@@ -198,7 +206,12 @@ class FrontEnd:
         self.poll_attempts = 0
         # Max attempts before giving up on a query
         self.max_poll_attempts = 5
-        self.stats = {"updates": 0, "query_starts": 0, "query_completes": 0, "failed_polls": 0}
+        self.stats = {
+            "updates": 0,
+            "query_starts": 0,
+            "query_completes": 0,
+            "failed_polls": 0,
+        }
 
     @property
     def last_seen_val(self) -> Totaler:
@@ -223,7 +236,6 @@ class FrontEnd:
         self.preferred_node = self.nodes[random.randint(0, len(self.nodes) - 1)]
 
     def update_val(self) -> bool:
-        # TODO: use procedure call across the system
         possible_calls = [
             ProcedureCall(name="incr", args={}),
             ProcedureCall(name="decr", args={}),
@@ -238,7 +250,9 @@ class FrontEnd:
         chosen_call = possible_calls[random.randint(0, len(possible_calls) - 1)]
         if not chosen_call:
             return False
-        self.preferred_node.update_queue.push(UpdateInfo(prev=self.prev, op=chosen_call))
+        self.preferred_node.update_queue.push(
+            UpdateInfo(prev=self.prev, op=chosen_call)
+        )
         self.stats["updates"] += 1
         return True
 
@@ -265,9 +279,6 @@ class FrontEnd:
         self.poll_id = None
         self.blocked = False
         self.poll_attempts = 0
-
-
-        
 
 
 class Cluster:
@@ -319,6 +330,7 @@ class Cluster:
 
 # Runtime stuff ------------------------------------------------------
 
+
 def _generate_nodes(n: int = 10):
     nodes = []
     for i in range(n):
@@ -333,10 +345,11 @@ def _generate_nodes(n: int = 10):
                 ts_table=[MultiPartTimestamp([0] * n) for _ in range(n)],
                 gossip_queue=GossipQueue(),
                 update_queue=UpdateQueue(),
-                query_queue=QueryQueue()
+                query_queue=QueryQueue(),
             )
         )
     return nodes
+
 
 def _generate_front_ends(n: int = 25):
     fes = []
@@ -344,11 +357,10 @@ def _generate_front_ends(n: int = 25):
         fes.append(FrontEnd(id=i))
     return fes
 
+
 if __name__ == "__main__":
     nodes = _generate_nodes()
     front_ends = _generate_front_ends()
     cluster = Cluster(nodes=nodes, front_ends=front_ends)
     cluster.run(50)
     cluster.summarize()
-
-

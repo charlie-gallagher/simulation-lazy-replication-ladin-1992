@@ -1,4 +1,3 @@
-
 class Totaler:
     def __init__(self) -> None:
         self.val = 0
@@ -20,4 +19,3 @@ class Totaler:
 
     def subtract(self, other: int) -> None:
         self.val -= other
-
