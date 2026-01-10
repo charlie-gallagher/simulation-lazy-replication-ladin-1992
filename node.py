@@ -7,25 +7,22 @@ from copy import deepcopy
 
 @dataclasses.dataclass
 class ProcedureCall:
-        # Name of the procedure
         name: str
-        # Arguments to the procedure
         args: dict
 
 
 @dataclasses.dataclass
 class OperationInfo:
+    pass
     # Invocation ID
-    cid: Any
+    # cid: Any
     # Actual timestamp, for timeouts
-    time: datetime.datetime
+    # time: datetime.datetime
 
 
 @dataclasses.dataclass
 class UpdateInfo(OperationInfo):
-    # Previous timestamp before update was made
     prev: MultiPartTimestamp
-    # Information about the update call
     op: ProcedureCall
 
 
@@ -157,17 +154,14 @@ class Node:
                 "incr": self.val.incr,
                 "decr": self.val.decr
             }
-            op_info, ts = self.update_queue.pop()
-            op = op_map[op_info[0]]
-            kwargs = op_info[1]
-            if kwargs:
-                op(**kwargs)
-            else:
-                op()
+            update_info = self.update_queue.pop()
+            op = op_map[update_info.op.name]
+            kwargs = update_info.op.args or {}
+            op(**kwargs)
             self.rep_ts.incr(self.id)
             current_rep_ts = self.rep_ts.get(self.id)
-            ts.set(self.id, current_rep_ts)
-            self.val_ts = self.val_ts.merge(ts)
+            update_info.prev.set(self.id, current_rep_ts)
+            self.val_ts = self.val_ts.merge(update_info.prev)
 
     def clear_query_queue(self) -> None:
         while True:
@@ -229,11 +223,12 @@ class FrontEnd:
         self.preferred_node = self.nodes[random.randint(0, len(self.nodes) - 1)]
 
     def update_val(self) -> bool:
+        # TODO: use procedure call across the system
         possible_calls = [
-            ("incr", None),
-            ("decr", None),
-            ("add", {"other": 5}),
-            ("subtract", {"other": 3}),
+            ProcedureCall(name="incr", args={}),
+            ProcedureCall(name="decr", args={}),
+            ProcedureCall(name="add", args={"other": 5}),
+            ProcedureCall(name="subtract", args={"other": 3}),
             # Poor man's weighting
             None,
             None,
@@ -243,8 +238,7 @@ class FrontEnd:
         chosen_call = possible_calls[random.randint(0, len(possible_calls) - 1)]
         if not chosen_call:
             return False
-        # TODO: What should this format be?
-        self.preferred_node.update_queue.push((chosen_call, self.prev))
+        self.preferred_node.update_queue.push(UpdateInfo(prev=self.prev, op=chosen_call))
         self.stats["updates"] += 1
         return True
 
