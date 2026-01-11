@@ -305,6 +305,7 @@ class FrontEnd:
         if self.poll_attempts > self.max_poll_attempts:
             self.stats["failed_polls"] += 1
             self._clear_poll_state()
+            return False
 
         for id, val in self.preferred_node.query_results:
             if self.query_poll_id == id:
@@ -312,7 +313,8 @@ class FrontEnd:
                 self.preferred_node.ack_query_result(self.query_poll_id)
                 self.stats["query_completes"] += 1
                 self._clear_poll_state()
-                return
+                return True
+        return False
 
     def _clear_poll_state(self) -> None:
         self.query_poll_id = None
@@ -353,10 +355,9 @@ class Cluster:
             self.t = i
             for fe in self.front_ends:
                 if fe.blocked:
-                    fe.poll_for_val()
-                    # Bugfix: only choose new node after finishing work
-                    #         with current node
-                    fe.choose_new_node()
+                    val_success = fe.poll_for_val()
+                    if val_success:
+                        fe.choose_new_node()
                 else:
                     if fe.update_val():
                         self.stats["updates"] += 1
