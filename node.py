@@ -87,6 +87,9 @@ class UpdateQueue:
     def pop(self) -> UpdateInfo:
         return self._queue.pop()
 
+    def lpop(self) -> UpdateInfo:
+        return self._queue.pop(0)
+
 
 class QueryQueue:
     def __init__(self, capacity: int = 500) -> None:
@@ -154,16 +157,31 @@ class Node:
         print(f"  Query results length: {len(self.query_results)}")
 
     def clear_update_queue(self) -> None:
+        # Set to an initial value that will never match len(update_queue)
+        prev_uq_len = -1
         while True:
             if len(self.update_queue) == 0:
+                print("Queue is empty, success!")
                 break
+            # Prevent infinite loops
+            if len(self.update_queue) == prev_uq_len:
+                print("Preventing an infinite loop!")
+                break
+            prev_uq_len = len(self.update_queue)
             op_map = {
                 "add": self.val.add,
                 "subtract": self.val.subtract,
                 "incr": self.val.incr,
                 "decr": self.val.decr,
             }
-            update_info = self.update_queue.pop()
+            update_info = self.update_queue.lpop()
+            # If update is not ready to be applied, put it back in the queue
+            if update_info.prev > self.val_ts:
+                print("Update can't be applied! Need more gossip")
+                print(update_info)
+                self.update_queue.push(update_info)
+                continue
+
             op = op_map[update_info.op.name]
             kwargs = update_info.op.args or {}
             op(**kwargs)
@@ -243,7 +261,7 @@ class FrontEnd:
         print(f"  Seen vals: {self.seen_vals}")
         print(f"  Stats: {self.stats}")
 
-    def choose_node(self, nodes: List[Node]) -> None:
+    def choose_node(self) -> None:
         self.n_nodes = len(self.nodes)
         self.prev = MultiPartTimestamp([0] * self.n_nodes)
         self.preferred_node = nodes[random.randint(0, len(self.nodes) - 1)]
@@ -264,11 +282,15 @@ class FrontEnd:
             None,
         ]
         chosen_call = possible_calls[random.randint(0, len(possible_calls) - 1)]
+
         if not chosen_call:
             return False
+
         self.preferred_node.update_queue.push(
-            UpdateInfo(prev=self.prev, op=chosen_call)
+            UpdateInfo(prev=self.prev.copy(), op=chosen_call)
         )
+        # TODO: need to get a new self.prev value by getting a response from
+        #       the replica. Use polling like with queries.
         self.stats["updates"] += 1
         return True
 
@@ -306,7 +328,7 @@ class Cluster:
             "updates": 0,
         }
         for fe in self.front_ends:
-            fe.choose_node(self.nodes)
+            fe.choose_node()
 
     def summarize(self) -> None:
         n_nodes = len(self.nodes)
