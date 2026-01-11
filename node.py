@@ -130,6 +130,7 @@ class Node:
     gossip_queue: GossipQueue
     update_queue: UpdateQueue
     query_queue: QueryQueue
+    other_nodes: List["Node"] = dataclasses.field(default_factory=list)
     query_results: List[Tuple[int, Totaler]] = dataclasses.field(default_factory=list)
 
     def __post_init__(self):
@@ -170,7 +171,9 @@ class Node:
             self.rep_ts.incr(self.id)
             # Update u.prev's timestamp for this node using self.rep_ts.get(self.id)
             current_rep_ts = self.rep_ts.get(self.id)
-            update_info.prev.set(self.id, current_rep_ts)
+            prev_copy = update_info.prev.copy()
+            prev_copy.set(self.id, current_rep_ts)
+            update_info.prev = prev_copy
             # Create a record and save it in the log
             self.log.append(
                 Record(msg=update_info, rnode=self.id, ts=update_info.prev.copy())
@@ -195,6 +198,7 @@ class FrontEnd:
         self.id = id
         self.preferred_node = None
         self.prev = None
+        self.nodes = dataclasses.field(default_factory=list)
         self.n_nodes = -1
         # Values seen so far (after successful polling)
         self.seen_vals = []
@@ -227,7 +231,6 @@ class FrontEnd:
         print(f"  Stats: {self.stats}")
 
     def choose_node(self, nodes: List[Node]) -> None:
-        self.nodes = nodes
         self.n_nodes = len(self.nodes)
         self.prev = MultiPartTimestamp([0] * self.n_nodes)
         self.preferred_node = nodes[random.randint(0, len(self.nodes) - 1)]
@@ -331,7 +334,7 @@ class Cluster:
 # Runtime stuff ------------------------------------------------------
 
 
-def _generate_nodes(n: int = 10):
+def _generate_nodes(n: int = 1):
     nodes = []
     for i in range(n):
         nodes.append(
@@ -351,7 +354,7 @@ def _generate_nodes(n: int = 10):
     return nodes
 
 
-def _generate_front_ends(n: int = 25):
+def _generate_front_ends(n: int = 10):
     fes = []
     for i in range(n):
         fes.append(FrontEnd(id=i))
@@ -359,8 +362,14 @@ def _generate_front_ends(n: int = 25):
 
 
 if __name__ == "__main__":
-    nodes = _generate_nodes()
+    nodes = _generate_nodes(1)
     front_ends = _generate_front_ends()
+    # Tell FEs and nodes about other nodes
+    for fe in front_ends:
+        fe.nodes = nodes
+    for node in nodes:
+        id = node.id
+        node.other_nodes = [x for x in nodes if x.id != id]
     cluster = Cluster(nodes=nodes, front_ends=front_ends)
-    cluster.run(50)
+    cluster.run(30)
     cluster.summarize()
