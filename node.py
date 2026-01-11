@@ -47,7 +47,7 @@ class QueueFullException(Exception):
 
 
 class GossipQueue:
-    def __init__(self, capacity: int = 500) -> None:
+    def __init__(self, capacity: int = 5000) -> None:
         self._queue: List[Record] = []
         self.capacity = capacity
 
@@ -192,6 +192,19 @@ class Node:
     def ack_query_result(self, id: int) -> None:
         self.query_results = [x for x in self.query_results if x[0] != id]
 
+    def send_gossip(self) -> None:
+        if not self.other_nodes:
+            return
+        # Send all of this node's log records to all other nodes
+        for n in self.other_nodes:
+            for r in self.log:
+                if r.rnode == self.id:
+                    n.gossip_queue.push(deepcopy(r))
+
+    def clear_gossip_queue(self) -> None:
+        # What to do here?
+        pass
+
 
 class FrontEnd:
     def __init__(self, id: int):
@@ -327,14 +340,16 @@ class Cluster:
                         self.stats["updates"] += 1
                     fe.query_val()
             for be in self.nodes:
+                be.clear_gossip_queue()
                 be.clear_update_queue()
                 be.clear_query_queue()
+                be.send_gossip()
 
 
 # Runtime stuff ------------------------------------------------------
 
 
-def _generate_nodes(n: int = 1):
+def _generate_nodes(n: int):
     nodes = []
     for i in range(n):
         nodes.append(
@@ -354,7 +369,7 @@ def _generate_nodes(n: int = 1):
     return nodes
 
 
-def _generate_front_ends(n: int = 10):
+def _generate_front_ends(n: int):
     fes = []
     for i in range(n):
         fes.append(FrontEnd(id=i))
@@ -362,8 +377,8 @@ def _generate_front_ends(n: int = 10):
 
 
 if __name__ == "__main__":
-    nodes = _generate_nodes(1)
-    front_ends = _generate_front_ends()
+    nodes = _generate_nodes(3)
+    front_ends = _generate_front_ends(10)
     # Tell FEs and nodes about other nodes
     for fe in front_ends:
         fe.nodes = nodes
@@ -371,5 +386,5 @@ if __name__ == "__main__":
         id = node.id
         node.other_nodes = [x for x in nodes if x.id != id]
     cluster = Cluster(nodes=nodes, front_ends=front_ends)
-    cluster.run(30)
+    cluster.run(10)
     cluster.summarize()
