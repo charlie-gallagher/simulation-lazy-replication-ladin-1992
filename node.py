@@ -233,10 +233,8 @@ class FrontEnd:
         self.n_nodes = -1
         # Values seen so far (after successful polling)
         self.seen_vals = []
-        # If True, waits for polling to complete
-        self.blocked = False
         # A UID to poll self.preferred_node for
-        self.poll_id = None
+        self.query_poll_id = None
         # Current number of poll attempts
         self.poll_attempts = 0
         # Max attempts before giving up on a query
@@ -247,6 +245,10 @@ class FrontEnd:
             "query_completes": 0,
             "failed_polls": 0,
         }
+
+    @property
+    def blocked(self) -> bool:
+        return self.query_poll_id is not None
 
     @property
     def last_seen_val(self) -> Totaler:
@@ -296,8 +298,7 @@ class FrontEnd:
 
     def query_val(self) -> None:
         self.stats["query_starts"] += 1
-        self.poll_id = self.preferred_node.query_queue.push(self.prev)
-        self.blocked = True
+        self.query_poll_id = self.preferred_node.query_queue.push(self.prev)
 
     def poll_for_val(self) -> bool:
         self.poll_attempts += 1
@@ -306,16 +307,15 @@ class FrontEnd:
             self._clear_poll_state()
 
         for id, val in self.preferred_node.query_results:
-            if self.poll_id == id:
+            if self.query_poll_id == id:
                 self.seen_vals.append(deepcopy(val))
-                self.preferred_node.ack_query_result(self.poll_id)
+                self.preferred_node.ack_query_result(self.query_poll_id)
                 self.stats["query_completes"] += 1
                 self._clear_poll_state()
                 return
 
     def _clear_poll_state(self) -> None:
-        self.poll_id = None
-        self.blocked = False
+        self.query_poll_id = None
         self.poll_attempts = 0
 
 
