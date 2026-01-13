@@ -20,10 +20,12 @@ class OperationInfo:
     # Actual timestamp, for timeouts
     # time: datetime.datetime
 
+
 @dataclasses.dataclass
 class QueryResult:
     val: Totaler
     ts: MultiPartTimestamp
+
 
 @dataclasses.dataclass
 class AckInfo(OperationInfo):
@@ -35,6 +37,7 @@ class UpdateInfo(OperationInfo):
     prev: MultiPartTimestamp
     op: ProcedureCall
     front_end_id: int
+
 
 @dataclasses.dataclass
 class QueryInfo(OperationInfo):
@@ -202,7 +205,9 @@ class Node:
             }
             uid, update_info = self.update_queue.lpop()
             # If update is not ready to be applied, put it back in the queue
-            print(f"Update: (fid: {update_info.front_end_id}, nid: {self.id}) f.prev: {update_info.prev} vs val.prev {self.val_ts}")
+            print(
+                f"Update: (fid: {update_info.front_end_id}, nid: {self.id}) f.prev: {update_info.prev} vs val.prev {self.val_ts}"
+            )
             if not update_info.prev <= self.val_ts:
                 print("Update can't be applied! Need more gossip")
                 self.update_queue.push(update_info, uid)
@@ -236,9 +241,13 @@ class Node:
                 break
             # For now, remove all queue elements and write val to results
             uid, update_info = self.query_queue.pop()
-            print(f"Query: (fid: {update_info.front_end_id} nid: {self.id}) prev ts: {update_info.prev} local ts: {self.val_ts}")
+            print(
+                f"Query: (fid: {update_info.front_end_id} nid: {self.id}) prev ts: {update_info.prev} local ts: {self.val_ts}"
+            )
             if update_info.prev <= self.val_ts:
-                self.query_results.append((uid, QueryResult(val=self.val, ts=self.val_ts)))
+                self.query_results.append(
+                    (uid, QueryResult(val=self.val, ts=self.val_ts))
+                )
             else:
                 print("Sorry! I can't process this query right now")
 
@@ -355,7 +364,9 @@ class FrontEnd:
 
     def query_val(self) -> None:
         self.stats["query_starts"] += 1
-        self.query_poll_id = self.preferred_node.query_queue.push(QueryInfo(prev=self.prev, front_end_id=self.id))
+        self.query_poll_id = self.preferred_node.query_queue.push(
+            QueryInfo(prev=self.prev, front_end_id=self.id)
+        )
 
     def poll_for_val(self) -> bool:
         self.poll_attempts += 1
