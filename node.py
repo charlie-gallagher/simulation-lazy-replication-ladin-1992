@@ -20,6 +20,10 @@ class OperationInfo:
     # Actual timestamp, for timeouts
     # time: datetime.datetime
 
+@dataclasses.dataclass
+class QueryResult:
+    val: Totaler
+    ts: MultiPartTimestamp
 
 @dataclasses.dataclass
 class AckInfo(OperationInfo):
@@ -144,7 +148,9 @@ class Node:
     gossip_queue: GossipQueue
     update_queue: UpdateQueue
     query_queue: QueryQueue
+    # For routing gossip/broadcast messages
     other_nodes: List["Node"] = dataclasses.field(default_factory=list)
+    # Storage for results that front ends are looking for
     query_results: List[Tuple[int, Totaler]] = dataclasses.field(default_factory=list)
     update_results: List[Tuple[int, MultiPartTimestamp]] = dataclasses.field(
         default_factory=list
@@ -191,6 +197,7 @@ class Node:
             }
             uid, update_info = self.update_queue.lpop()
             # If update is not ready to be applied, put it back in the queue
+            print(f"Update: (fid: {update_info.front_end_id}, nid: {self.id}) f.prev: {update_info.prev} vs val.prev {self.val_ts}")
             if update_info.prev > self.val_ts:
                 print("Update can't be applied! Need more gossip")
                 print(update_info)
@@ -225,7 +232,8 @@ class Node:
                 break
             # For now, remove all queue elements and write val to results
             uid, ts = self.query_queue.pop()
-            self.query_results.append((uid, self.val))
+            print(f"Query: (uid: {uid}) prev ts: {ts} local ts: {self.val_ts}")
+            self.query_results.append((uid, QueryResult(val=self.val, ts=self.val_ts)))
 
     def ack_query_result(self, id: int) -> None:
         self.query_results = [x for x in self.query_results if x[0] != id]
@@ -349,9 +357,10 @@ class FrontEnd:
             self._clear_poll_state()
             return False
 
-        for id, val in self.preferred_node.query_results:
+        for id, qres in self.preferred_node.query_results:
             if self.query_poll_id == id:
-                self.seen_vals.append(deepcopy(val))
+                self.seen_vals.append(deepcopy(qres.val))
+                self.prev = qres.ts.copy()
                 self.preferred_node.ack_query_result(self.query_poll_id)
                 self.stats["query_completes"] += 1
                 self._clear_poll_state()
@@ -405,6 +414,7 @@ class Cluster:
                     if fe.update_val():
                         self.stats["updates"] += 1
                     else:
+                        fe.choose_new_node()
                         fe.query_val()
             for be in self.nodes:
                 be.clear_gossip_queue()
@@ -444,8 +454,8 @@ def _generate_front_ends(n: int):
 
 
 if __name__ == "__main__":
-    nodes = _generate_nodes(1)
-    front_ends = _generate_front_ends(1)
+    nodes = _generate_nodes(3)
+    front_ends = _generate_front_ends(10)
     # Tell FEs and nodes about other nodes
     for fe in front_ends:
         fe.nodes = nodes
