@@ -79,6 +79,9 @@ class GossipQueue:
     def pop(self) -> Record:
         return self._queue.pop()
 
+    def lpop(self) -> UpdateInfo:
+        return self._queue.pop(0)
+
 
 class UpdateQueue:
     def __init__(self, capacity: int = 500) -> None:
@@ -264,8 +267,37 @@ class Node:
                     n.gossip_queue.push(deepcopy(r))
 
     def clear_gossip_queue(self) -> None:
-        # What to do here?
-        pass
+        op_map = {
+            "add": self.val.add,
+            "subtract": self.val.subtract,
+            "incr": self.val.incr,
+            "decr": self.val.decr,
+        }
+        print(f"Before gossip ({self.id}): rep_ts: {self.rep_ts} val: {self.val} val_ts: {self.val_ts}")
+        while True:
+            if len(self.gossip_queue) == 0:
+                break
+            rec = self.gossip_queue.lpop()
+            # Ignore message if ts is old
+            if rec.ts <= self.ts_table[rec.rnode]:
+                continue
+            # Otherwise, let's apply the operation and update ts_table
+            self.ts_table[rec.rnode] = rec.ts.copy()
+            self.rep_ts = self.rep_ts.merge(rec.ts.copy())
+
+            # Apply operation to val
+            # TODO: make this a packaged operation
+            msg = rec.msg
+            op = op_map[msg.op.name]
+            kwargs = msg.op.args or {}
+            op(**kwargs)
+            self.val_ts = self.val_ts.merge(msg.prev)
+
+            # Add record to this node's log
+            self.log.append(deepcopy(rec))
+        print(f"After gossip ({self.id}): rep_ts: {self.rep_ts} val: {self.val} val_ts: {self.val_ts}")
+
+            
 
 
 class FrontEnd:
