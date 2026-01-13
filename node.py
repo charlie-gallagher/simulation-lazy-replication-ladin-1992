@@ -36,6 +36,11 @@ class UpdateInfo(OperationInfo):
     op: ProcedureCall
     front_end_id: int
 
+@dataclasses.dataclass
+class QueryInfo(OperationInfo):
+    prev: MultiPartTimestamp
+    front_end_id: int
+
 
 @dataclasses.dataclass
 class Record:
@@ -118,14 +123,14 @@ class QueryQueue:
     def size(self):
         return len(self._queue)
 
-    def push(self, q: MultiPartTimestamp) -> int:
+    def push(self, q: QueryInfo) -> int:
         if self.size >= self.capacity:
             raise QueueFullException("Queue is full")
         uid = random.randint(0, 1000000)
         self._queue.append((uid, q))
         return uid
 
-    def pop(self) -> Tuple[int, MultiPartTimestamp]:
+    def pop(self) -> Tuple[int, QueryInfo]:
         return self._queue.pop()
 
 
@@ -198,9 +203,8 @@ class Node:
             uid, update_info = self.update_queue.lpop()
             # If update is not ready to be applied, put it back in the queue
             print(f"Update: (fid: {update_info.front_end_id}, nid: {self.id}) f.prev: {update_info.prev} vs val.prev {self.val_ts}")
-            if update_info.prev > self.val_ts:
+            if not update_info.prev <= self.val_ts:
                 print("Update can't be applied! Need more gossip")
-                print(update_info)
                 self.update_queue.push(update_info, uid)
                 continue
 
@@ -231,9 +235,12 @@ class Node:
             if len(self.query_queue) == 0:
                 break
             # For now, remove all queue elements and write val to results
-            uid, ts = self.query_queue.pop()
-            print(f"Query: (uid: {uid}) prev ts: {ts} local ts: {self.val_ts}")
-            self.query_results.append((uid, QueryResult(val=self.val, ts=self.val_ts)))
+            uid, update_info = self.query_queue.pop()
+            print(f"Query: (fid: {update_info.front_end_id} nid: {self.id}) prev ts: {update_info.prev} local ts: {self.val_ts}")
+            if update_info.prev <= self.val_ts:
+                self.query_results.append((uid, QueryResult(val=self.val, ts=self.val_ts)))
+            else:
+                print("Sorry! I can't process this query right now")
 
     def ack_query_result(self, id: int) -> None:
         self.query_results = [x for x in self.query_results if x[0] != id]
@@ -348,7 +355,7 @@ class FrontEnd:
 
     def query_val(self) -> None:
         self.stats["query_starts"] += 1
-        self.query_poll_id = self.preferred_node.query_queue.push(self.prev)
+        self.query_poll_id = self.preferred_node.query_queue.push(QueryInfo(prev=self.prev, front_end_id=self.id))
 
     def poll_for_val(self) -> bool:
         self.poll_attempts += 1
