@@ -46,6 +46,13 @@ class QueryInfo(OperationInfo):
 
 
 @dataclasses.dataclass
+class GossipInfo:
+    src: int
+    src_ts: MultiPartTimestamp
+    records: List["Record"]
+
+
+@dataclasses.dataclass
 class Record:
     # About the operation
     msg: OperationInfo
@@ -71,15 +78,15 @@ class GossipQueue:
     def size(self):
         return len(self._queue)
 
-    def push(self, r: Record) -> None:
+    def push(self, msg: GossipInfo) -> None:
         if self.size >= self.capacity:
             raise QueueFullException("Queue is full")
-        self._queue.append(r)
+        self._queue.append(msg)
 
-    def pop(self) -> Record:
+    def pop(self) -> GossipInfo:
         return self._queue.pop()
 
-    def lpop(self) -> UpdateInfo:
+    def lpop(self) -> GossipInfo:
         return self._queue.pop(0)
 
 
@@ -129,10 +136,11 @@ class QueryQueue:
     def size(self):
         return len(self._queue)
 
-    def push(self, q: QueryInfo) -> int:
+    def push(self, q: QueryInfo, uid: int = -1) -> int:
         if self.size >= self.capacity:
             raise QueueFullException("Queue is full")
-        uid = random.randint(0, 1000000)
+        if uid == -1:
+            uid = random.randint(0, 1000000)
         self._queue.append((uid, q))
         return uid
 
@@ -239,20 +247,27 @@ class Node:
         self.update_results = [x for x in self.update_results if x[0] != id]
 
     def clear_query_queue(self) -> None:
+        prev_qq_len = -1
         while True:
             if len(self.query_queue) == 0:
                 break
+            # Prevent infinite loops
+            if len(self.query_queue) == prev_qq_len:
+                print("Preventing an infinite loop!")
+                break
+            prev_qq_len = len(self.query_queue)
             # For now, remove all queue elements and write val to results
-            uid, update_info = self.query_queue.pop()
+            uid, query_info = self.query_queue.pop()
             print(
-                f"Query: (fid: {update_info.front_end_id} nid: {self.id}) prev ts: {update_info.prev} local ts: {self.val_ts}"
+                f"Query: (fid: {query_info.front_end_id} nid: {self.id}) prev ts: {query_info.prev} local ts: {self.val_ts}"
             )
-            if update_info.prev <= self.val_ts:
+            if query_info.prev <= self.val_ts:
                 self.query_results.append(
                     (uid, QueryResult(val=self.val, ts=self.val_ts))
                 )
             else:
                 print("Sorry! I can't process this query right now")
+                self.query_queue.push(q=query_info, uid=uid)
 
     def ack_query_result(self, id: int) -> None:
         self.query_results = [x for x in self.query_results if x[0] != id]
@@ -260,11 +275,13 @@ class Node:
     def send_gossip(self) -> None:
         if not self.other_nodes:
             return
+        # Make a gossip message
+        msg = GossipInfo(
+            src=self.id, src_ts=self.rep_ts.copy(), records=deepcopy(self.log)
+        )
         # Send all of this node's log records to all other nodes
         for n in self.other_nodes:
-            for r in self.log:
-                if r.rnode == self.id:
-                    n.gossip_queue.push(deepcopy(r))
+            n.gossip_queue.push(deepcopy(msg))
 
     def clear_gossip_queue(self) -> None:
         op_map = {
@@ -273,31 +290,44 @@ class Node:
             "incr": self.val.incr,
             "decr": self.val.decr,
         }
-        print(f"Before gossip ({self.id}): rep_ts: {self.rep_ts} val: {self.val} val_ts: {self.val_ts}")
+        print(
+            f"Before gossip ({self.id}): rep_ts: {self.rep_ts} val: {self.val} val_ts: {self.val_ts}"
+        )
+        # Randomly ignore all gossip for a round, to make it interesting
+        if random.randint(0, 1) == 2:
+            print("After gossip (returned early!)")
+            return
         while True:
             if len(self.gossip_queue) == 0:
                 break
-            rec = self.gossip_queue.lpop()
-            # Ignore message if ts is old
-            if rec.ts <= self.ts_table[rec.rnode]:
+            msg = self.gossip_queue.lpop()
+
+            if msg.src_ts <= self.ts_table[msg.src]:
+                print("Already processed this message")
                 continue
-            # Otherwise, let's apply the operation and update ts_table
-            self.ts_table[rec.rnode] = rec.ts.copy()
-            self.rep_ts = self.rep_ts.merge(rec.ts.copy())
 
-            # Apply operation to val
+            # Update ts_table
+            self.ts_table[msg.src] = msg.src_ts
+
+            # Merge timestamp into rep_ts
+            self.rep_ts = self.rep_ts.merge(msg.src_ts)
+
+            # Find new log records
+            new_records = [x for x in msg.records if x not in self.log]
+            self.log.extend(deepcopy(new_records))
+
+            # For each log record, apply the transformation
             # TODO: make this a packaged operation
-            msg = rec.msg
-            op = op_map[msg.op.name]
-            kwargs = msg.op.args or {}
-            op(**kwargs)
-            self.val_ts = self.val_ts.merge(msg.prev)
-
-            # Add record to this node's log
-            self.log.append(deepcopy(rec))
-        print(f"After gossip ({self.id}): rep_ts: {self.rep_ts} val: {self.val} val_ts: {self.val_ts}")
-
-            
+            for r in new_records:
+                # _Technically_ I'm supposed to sort these, but I don't think it's required?
+                umsg = r.msg
+                op = op_map[umsg.op.name]
+                kwargs = umsg.op.args or {}
+                op(**kwargs)
+                self.val_ts = self.val_ts.merge(umsg.prev)
+        print(
+            f"After gossip ({self.id}): rep_ts: {self.rep_ts} val: {self.val} val_ts: {self.val_ts}"
+        )
 
 
 class FrontEnd:
@@ -471,6 +501,11 @@ class Cluster:
                 be.clear_update_queue()
                 be.clear_query_queue()
                 be.send_gossip()
+        # Exchange gossip and try to get to consistency
+        for be in self.nodes:
+            be.send_gossip()
+        for be in self.nodes:
+            be.clear_gossip_queue()
 
 
 # Runtime stuff ------------------------------------------------------
@@ -513,5 +548,5 @@ if __name__ == "__main__":
         id = node.id
         node.other_nodes = [x for x in nodes if x.id != id]
     cluster = Cluster(nodes=nodes, front_ends=front_ends)
-    cluster.run(10)
+    cluster.run(100)
     cluster.summarize()
