@@ -1,5 +1,14 @@
 # Providing high availability using lazy replication
 
+## Quick start
+The simulation is pure Python. The entry point is the `node.py` script.
+
+```
+python3 node.py
+```
+
+## Overview
+
 Original paper: https://www.cs.princeton.edu/courses/archive/spr24/cos418/papers/lazy.pdf
 
 This repo contains a simulated version of the paper "Providing high availability
