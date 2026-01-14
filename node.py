@@ -253,7 +253,6 @@ class Node:
                 break
             # Prevent infinite loops
             if len(self.query_queue) == prev_qq_len:
-                print("Preventing an infinite loop!")
                 break
             prev_qq_len = len(self.query_queue)
             # For now, remove all queue elements and write val to results
@@ -276,8 +275,9 @@ class Node:
         if not self.other_nodes:
             return
         # Make a gossip message
+        log_messages = [x for x in self.log if x.rnode == self.id]
         msg = GossipInfo(
-            src=self.id, src_ts=self.rep_ts.copy(), records=deepcopy(self.log)
+            src=self.id, src_ts=self.rep_ts.copy(), records=deepcopy(log_messages)
         )
         # Send all of this node's log records to all other nodes
         for n in self.other_nodes:
@@ -290,11 +290,8 @@ class Node:
             "incr": self.val.incr,
             "decr": self.val.decr,
         }
-        print(
-            f"Before gossip ({self.id}): rep_ts: {self.rep_ts} val: {self.val} val_ts: {self.val_ts}"
-        )
         # Randomly ignore all gossip for a round, to make it interesting
-        if random.randint(0, 1) == 2:
+        if random.randint(0, 1) == 1:
             print("After gossip (returned early!)")
             return
         while True:
@@ -303,7 +300,6 @@ class Node:
             msg = self.gossip_queue.lpop()
 
             if msg.src_ts <= self.ts_table[msg.src]:
-                print("Already processed this message")
                 continue
 
             # Update ts_table
@@ -325,9 +321,6 @@ class Node:
                 kwargs = umsg.op.args or {}
                 op(**kwargs)
                 self.val_ts = self.val_ts.merge(umsg.prev)
-        print(
-            f"After gossip ({self.id}): rep_ts: {self.rep_ts} val: {self.val} val_ts: {self.val_ts}"
-        )
 
 
 class FrontEnd:
