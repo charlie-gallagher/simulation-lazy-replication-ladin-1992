@@ -18,11 +18,11 @@ learn about the system proposed in the paper and to try to implement it myself.
 The paper describes a distributed system of replicated servers with eventual
 consistency through _causal_ relationships between events. Each client node sees
 a consistent view of the system (read-your-writes, preserved session order,
-etc.). This is done through the use of vector clocks (see `timestamp.py`). The
-idea with vector clocks is that each server node keeps track of all other nodes
-in the system and how it relates to them. Vector clocks are vectors of
-monotonically increasing integers, where `x[i]` represents the number of
-operations processed at server `i`.
+etc.). This is done through the use of vector clocks. The idea with vector
+clocks is that each server node keeps track of all other nodes in the system and
+how many updates they've processed. Vector clocks are vectors of monotonically
+increasing integers, where `x[i]` represents the number of operations processed
+at server `i`.
 
 The article does a better job explaining vector clocks concisely than I can. But
 a few interesting bits to note. In the Ladin et al. system, there are a number
@@ -30,8 +30,7 @@ of vector clocks in play.
 
 - `rep_ts` is the "time" as this server node understands it. This timestamp
   represents all of the events that it knows about personally via direct actions
-from the user and gossip messages (in my system, I actually use broadcast
-messages).
+from the user and gossip messages.
 - `val_ts` is the set of events that have contributed to the data (the "value").
   This is updated when the value is modified either by a user or by applying
 events received via gossip. The relationship between `rep_ts` and `val_ts` is
@@ -92,7 +91,7 @@ I did not follow the paper very closely. In particular:
 - Front ends have guaranteed message delivery, so there is no concept of a `cid`
   (invocation id), and front end messages are never rejected on the basis of a
 timestamp.
-- I have not implemented forced or immediate operations.
+- I have implemented neither forced nor immediate operations.
 - Servers always wait to receive gossip; they are never proactive about
   requesting it.
 - The simulated communication environment is a little too synthetic in my

@@ -231,17 +231,16 @@ class Node:
             self.rep_ts.incr(self.id)
             # Update u.prev's timestamp for this node using self.rep_ts.get(self.id)
             current_rep_ts = self.rep_ts.get(self.id)
-            prev_copy = update_info.prev.copy()
-            prev_copy.set(self.id, current_rep_ts)
-            update_info.prev = prev_copy
+            rec_ts = update_info.prev.copy()
+            rec_ts.set(self.id, current_rep_ts)
             # Create a record and save it in the log
             self.log.append(
-                Record(msg=update_info, rnode=self.id, ts=update_info.prev.copy())
+                Record(msg=update_info, rnode=self.id, ts=rec_ts)
             )
             # Set the timestamp for the value by merging u.prev and val_ts
-            self.val_ts = self.val_ts.merge(update_info.prev)
+            self.val_ts = self.val_ts.merge(rec_ts)
             # Finally, add the new timestamp to the update result list
-            self.update_results.append((uid, prev_copy.copy()))
+            self.update_results.append((uid, rec_ts.copy()))
 
     def ack_update_result(self, id: int) -> None:
         self.update_results = [x for x in self.update_results if x[0] != id]
@@ -255,14 +254,15 @@ class Node:
             if len(self.query_queue) == prev_qq_len:
                 break
             prev_qq_len = len(self.query_queue)
-            # For now, remove all queue elements and write val to results
+
+            # Remove all queue elements and write val to results
             uid, query_info = self.query_queue.pop()
             print(
                 f"Query: (fid: {query_info.front_end_id} nid: {self.id}) prev ts: {query_info.prev} local ts: {self.val_ts}"
             )
             if query_info.prev <= self.val_ts:
                 self.query_results.append(
-                    (uid, QueryResult(val=self.val, ts=self.val_ts))
+                    (uid, QueryResult(val=self.val, ts=self.val_ts.copy()))
                 )
             else:
                 print("Sorry! I can't process this query right now")
@@ -321,6 +321,20 @@ class Node:
                 kwargs = umsg.op.args or {}
                 op(**kwargs)
                 self.val_ts = self.val_ts.merge(umsg.prev)
+
+    def trim_log(self) -> int:
+        """Trim log and report on number of entries removed"""
+        to_remove = []
+        for i, r in enumerate(self.log):
+            rnode = r.rnode
+            isknown = all([self.ts_table[j.id].get(rnode) >= r.ts.get(rnode) for j in self.other_nodes])
+            if not isknown:
+                continue
+            to_remove.append(i)
+        print(f"Removing {len(to_remove)} log records from log!")
+        for i in reversed(to_remove):
+            self.log.pop(i)
+        return len(to_remove)
 
 
 class FrontEnd:
@@ -494,11 +508,14 @@ class Cluster:
                 be.clear_update_queue()
                 be.clear_query_queue()
                 be.send_gossip()
+                be.trim_log()
+
         # Exchange gossip and try to get to consistency
         for be in self.nodes:
             be.send_gossip()
         for be in self.nodes:
             be.clear_gossip_queue()
+            be.trim_log()
 
 
 # Runtime stuff ------------------------------------------------------
