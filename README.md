@@ -87,7 +87,6 @@ of the system is printed.
 ## Comparison to the paper
 I did not follow the paper very closely. In particular:
 
-- The log grows without bound.
 - Front ends have guaranteed message delivery, so there is no concept of a `cid`
   (invocation id), and front end messages are never rejected on the basis of a
 timestamp.
@@ -95,10 +94,15 @@ timestamp.
 - Servers always wait to receive gossip; they are never proactive about
   requesting it.
 - The simulated communication environment is a little too synthetic in my
-  opinion, but it works -- in the end, all servers have the same value.
+  opinion.
 
-I'm planning on adding a bound to the log some time soon, but the others are
-probably not going to make it into the simulation.
+I have a bug or two left in the code -- I've been hacking on it in my free time,
+so I haven't been the _most_ careful with some implementation details. But I'm
+not sure where my issue is. It was occasionally wrong before I added log cleanup
+(removing log records that are known everywhere). After I added log cleanup, the
+answers are even worse than ever. The good news is that it's wrong even when
+there are just 2 nodes and 5 ticks, so it's only a matter of time before I
+figure out what boneheaded mistake I made.
 
 ## Configuration
 How do you tweak the system? There are a few levers. First, you can change the

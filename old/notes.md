@@ -471,6 +471,48 @@ progress, and I'm not sure how the system works under partition conditions. I'm
 also not sure about conflicts -- when I update X and so does someone else. What
 operation types are allowed? Still some things I have to learn, clearly.
 
+# Symbols
+A few things I'd like to decode. 
+
+- ¬ means "Not" or negation
+- ⋀ is a logical AND
+- ⋁ is logical OR
+
+Decoding a few snippets. First, processing a gossip message (1):
+
+> Set the log equal to the log unioned with the set of records r in `m.new` such
+> that the negation of `r.ts <= rep_ts` holds.
+
+Gossip (2):
+
+> Set rep_ts equal to the result of merging rep_ts with m.ts.
+
+Gossip (3):
+
+> Set comp equal to the set of records in the log such that either r is an
+> update or r.prev <= rep_ts.
+
+Gossip (4):
+
+> While comp is not empty:
+>
+> - Select some r from comp such that there exists no r' in comp such that r'.ts
+>   is earlier than r.prev.
+> - Remove r from comp.
+> - If r has not already been seen (inval), then
+>   - Apply r.op to val
+>   - Add r.cid to inval
+> - Set val_ts equal to the merge of val_ts and r.ts.
+
+Gossip (6):
+
+> Set log equal to the set difference between log and the set of records r in
+> the log such that r is an update and r is known everywhere.
+
+Log removal:
+
+> isknown(A) is equivalent to for all replicas j, `ts_table[j][r.node] >=
+> r.ts[r.node]`.
 
 
 

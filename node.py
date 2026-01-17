@@ -174,9 +174,14 @@ class Node:
     update_results: List[Tuple[int, MultiPartTimestamp]] = dataclasses.field(
         default_factory=list
     )
+    stats: dict = dataclasses.field(default_factory=dict)
 
     def __post_init__(self):
-        self.ts_table[self.id] = self.rep_ts
+        self.stats = {"updates": 0, "gossip_messages_processed": 0, "gossip_updates_processed": 0, "queries": 0}
+
+
+    def _log_message(self, msg: str) -> None:
+        print(f"Node {self.id} :: {msg}")
 
     def summarize(self) -> None:
         print(f"Node ({self.id})")
@@ -195,17 +200,18 @@ class Node:
         print(f"  Query queue length: {len(self.query_queue)}")
         print(f"  Query results length: {len(self.query_results)}")
         print(f"  Update results length: {len(self.update_results)}")
+        print(f"  Stats: {self.stats}")
 
     def clear_update_queue(self) -> None:
         # Set to an initial value that will never match len(update_queue)
         prev_uq_len = -1
         while True:
             if len(self.update_queue) == 0:
-                print("Queue is empty, success!")
+                self._log_message("Queue is empty, success!")
                 break
             # Prevent infinite loops
             if len(self.update_queue) == prev_uq_len:
-                print("Preventing an infinite loop!")
+                self._log_message("Preventing an infinite loop!")
                 break
             prev_uq_len = len(self.update_queue)
             op_map = {
@@ -216,11 +222,11 @@ class Node:
             }
             uid, update_info = self.update_queue.lpop()
             # If update is not ready to be applied, put it back in the queue
-            print(
+            self._log_message(
                 f"Update: (fid: {update_info.front_end_id}, nid: {self.id}) f.prev: {update_info.prev} vs val.prev {self.val_ts}"
             )
             if not update_info.prev <= self.val_ts:
-                print("Update can't be applied! Need more gossip")
+                self._log_message("Update can't be applied! Need more gossip")
                 self.update_queue.push(update_info, uid)
                 continue
 
@@ -229,6 +235,7 @@ class Node:
             op(**kwargs)
             # Increment self timestamp
             self.rep_ts.incr(self.id)
+            self.ts_table[self.id] = self.rep_ts.copy()
             # Update u.prev's timestamp for this node using self.rep_ts.get(self.id)
             current_rep_ts = self.rep_ts.get(self.id)
             rec_ts = update_info.prev.copy()
@@ -241,6 +248,7 @@ class Node:
             self.val_ts = self.val_ts.merge(rec_ts)
             # Finally, add the new timestamp to the update result list
             self.update_results.append((uid, rec_ts.copy()))
+            self.stats["updates"] += 1
 
     def ack_update_result(self, id: int) -> None:
         self.update_results = [x for x in self.update_results if x[0] != id]
@@ -257,15 +265,16 @@ class Node:
 
             # Remove all queue elements and write val to results
             uid, query_info = self.query_queue.pop()
-            print(
+            self._log_message(
                 f"Query: (fid: {query_info.front_end_id} nid: {self.id}) prev ts: {query_info.prev} local ts: {self.val_ts}"
             )
             if query_info.prev <= self.val_ts:
                 self.query_results.append(
                     (uid, QueryResult(val=self.val, ts=self.val_ts.copy()))
                 )
+                self.stats["queries"] += 1
             else:
-                print("Sorry! I can't process this query right now")
+                self._log_message("Sorry! I can't process this query right now")
                 self.query_queue.push(q=query_info, uid=uid)
 
     def ack_query_result(self, id: int) -> None:
@@ -291,8 +300,8 @@ class Node:
             "decr": self.val.decr,
         }
         # Randomly ignore all gossip for a round, to make it interesting
-        if random.randint(0, 1) == 1:
-            print("After gossip (returned early!)")
+        if random.randint(0, 1) == 2:
+            self._log_message("After gossip (returned early!)")
             return
         while True:
             if len(self.gossip_queue) == 0:
@@ -302,15 +311,21 @@ class Node:
             if msg.src_ts <= self.ts_table[msg.src]:
                 continue
 
+            if msg.src == self.id:
+                continue
+
             # Update ts_table
             self.ts_table[msg.src] = msg.src_ts
 
             # Merge timestamp into rep_ts
             self.rep_ts = self.rep_ts.merge(msg.src_ts)
+            self.ts_table[self.id] = self.rep_ts.copy()
 
             # Find new log records
             new_records = [x for x in msg.records if x not in self.log]
             self.log.extend(deepcopy(new_records))
+
+            self.stats["gossip_messages_processed"] += 1
 
             # For each log record, apply the transformation
             # TODO: make this a packaged operation
@@ -321,17 +336,21 @@ class Node:
                 kwargs = umsg.op.args or {}
                 op(**kwargs)
                 self.val_ts = self.val_ts.merge(umsg.prev)
+                self.stats["gossip_updates_processed"] += 1
 
     def trim_log(self) -> int:
         """Trim log and report on number of entries removed"""
         to_remove = []
         for i, r in enumerate(self.log):
-            rnode = r.rnode
-            isknown = all([self.ts_table[j.id].get(rnode) >= r.ts.get(rnode) for j in self.other_nodes])
+            # This node can be confident that all other nodes have this
+            # record already if it's received timestamps from them at
+            # at least as late as the record's timestamp.
+            isknown = all([self.ts_table[j.id].get(r.rnode) >= r.ts.get(r.rnode) for j in self.other_nodes])
             if not isknown:
                 continue
             to_remove.append(i)
-        print(f"Removing {len(to_remove)} log records from log!")
+        if to_remove:
+            self._log_message(f"Removing {len(to_remove)} log records from log!")
         for i in reversed(to_remove):
             self.log.pop(i)
         return len(to_remove)
@@ -549,8 +568,8 @@ def _generate_front_ends(n: int):
 
 
 if __name__ == "__main__":
-    nodes = _generate_nodes(3)
-    front_ends = _generate_front_ends(10)
+    nodes = _generate_nodes(2)
+    front_ends = _generate_front_ends(1)
     # Tell FEs and nodes about other nodes
     for fe in front_ends:
         fe.nodes = nodes
@@ -558,5 +577,5 @@ if __name__ == "__main__":
         id = node.id
         node.other_nodes = [x for x in nodes if x.id != id]
     cluster = Cluster(nodes=nodes, front_ends=front_ends)
-    cluster.run(100)
+    cluster.run(5)
     cluster.summarize()
