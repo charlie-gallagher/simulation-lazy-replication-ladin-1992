@@ -177,8 +177,12 @@ class Node:
     stats: dict = dataclasses.field(default_factory=dict)
 
     def __post_init__(self):
-        self.stats = {"updates": 0, "gossip_messages_processed": 0, "gossip_updates_processed": 0, "queries": 0}
-
+        self.stats = {
+            "updates": 0,
+            "gossip_messages_processed": 0,
+            "gossip_updates_processed": 0,
+            "queries": 0,
+        }
 
     def _log_message(self, msg: str) -> None:
         print(f"Node {self.id} :: {msg}")
@@ -204,10 +208,11 @@ class Node:
 
     def clear_update_queue(self) -> None:
         # Set to an initial value that will never match len(update_queue)
+        self._log_message(f"Clearing update queue ({len(self.update_queue)})")
         prev_uq_len = -1
         while True:
             if len(self.update_queue) == 0:
-                self._log_message("Queue is empty, success!")
+                self._log_message("No more updates to process")
                 break
             # Prevent infinite loops
             if len(self.update_queue) == prev_uq_len:
@@ -230,22 +235,26 @@ class Node:
                 self.update_queue.push(update_info, uid)
                 continue
 
+            self._log_message(f"Processing update message {update_info}")
             op = op_map[update_info.op.name]
             kwargs = update_info.op.args or {}
             op(**kwargs)
+
             # Increment self timestamp
             self.rep_ts.incr(self.id)
             self.ts_table[self.id] = self.rep_ts.copy()
+
             # Update u.prev's timestamp for this node using self.rep_ts.get(self.id)
             current_rep_ts = self.rep_ts.get(self.id)
             rec_ts = update_info.prev.copy()
             rec_ts.set(self.id, current_rep_ts)
+
             # Create a record and save it in the log
-            self.log.append(
-                Record(msg=update_info, rnode=self.id, ts=rec_ts)
-            )
+            self.log.append(Record(msg=update_info, rnode=self.id, ts=rec_ts))
+
             # Set the timestamp for the value by merging u.prev and val_ts
             self.val_ts = self.val_ts.merge(rec_ts)
+
             # Finally, add the new timestamp to the update result list
             self.update_results.append((uid, rec_ts.copy()))
             self.stats["updates"] += 1
@@ -254,9 +263,11 @@ class Node:
         self.update_results = [x for x in self.update_results if x[0] != id]
 
     def clear_query_queue(self) -> None:
+        self._log_message(f"Clearing query queue ({len(self.query_queue)})")
         prev_qq_len = -1
         while True:
             if len(self.query_queue) == 0:
+                self._log_message("No more queries to return")
                 break
             # Prevent infinite loops
             if len(self.query_queue) == prev_qq_len:
@@ -281,6 +292,7 @@ class Node:
         self.query_results = [x for x in self.query_results if x[0] != id]
 
     def send_gossip(self) -> None:
+        self._log_message("Broadcasting gossip")
         if not self.other_nodes:
             return
         # Make a gossip message
@@ -293,6 +305,7 @@ class Node:
             n.gossip_queue.push(deepcopy(msg))
 
     def clear_gossip_queue(self) -> None:
+        self._log_message(f"Clearing gossip queue ({len(self.gossip_queue)})")
         op_map = {
             "add": self.val.add,
             "subtract": self.val.subtract,
@@ -305,6 +318,7 @@ class Node:
             return
         while True:
             if len(self.gossip_queue) == 0:
+                self._log_message("No more gossip messages")
                 break
             msg = self.gossip_queue.lpop()
 
@@ -340,12 +354,18 @@ class Node:
 
     def trim_log(self) -> int:
         """Trim log and report on number of entries removed"""
+        self._log_message("Trimming log")
         to_remove = []
         for i, r in enumerate(self.log):
             # This node can be confident that all other nodes have this
             # record already if it's received timestamps from them at
             # at least as late as the record's timestamp.
-            isknown = all([self.ts_table[j.id].get(r.rnode) >= r.ts.get(r.rnode) for j in self.other_nodes])
+            isknown = all(
+                [
+                    self.ts_table[j.id].get(r.rnode) >= r.ts.get(r.rnode)
+                    for j in self.other_nodes
+                ]
+            )
             if not isknown:
                 continue
             to_remove.append(i)
@@ -392,6 +412,9 @@ class FrontEnd:
     @property
     def last_seen_val(self) -> Totaler:
         return self.seen_vals[-1] if self.seen_vals else None
+    
+    def _log_message(self, msg: str) -> None:
+        print(f"Front end {self.id} :: {msg}")
 
     def summarize(self) -> None:
         print(f"FrontEnd ({self.id})")
@@ -406,10 +429,14 @@ class FrontEnd:
     def choose_node(self) -> None:
         self.n_nodes = len(self.nodes)
         self.prev = MultiPartTimestamp([0] * self.n_nodes)
-        self.preferred_node = nodes[random.randint(0, len(self.nodes) - 1)]
+        chosen_node = random.randint(0, len(self.nodes) - 1)
+        self._log_message(f"Choosing node to communicate with: {chosen_node}")
+        self.preferred_node = nodes[chosen_node]
 
     def choose_new_node(self) -> None:
-        self.preferred_node = self.nodes[random.randint(0, len(self.nodes) - 1)]
+        chosen_node = random.randint(0, len(self.nodes) - 1)
+        self._log_message(f"Choosing new node to communicate with: {chosen_node}")
+        self.preferred_node = self.nodes[chosen_node]
 
     def update_val(self) -> bool:
         possible_calls = [
@@ -420,14 +447,14 @@ class FrontEnd:
             # Poor man's weighting
             None,
             None,
-            None,
-            None,
         ]
         chosen_call = possible_calls[random.randint(0, len(possible_calls) - 1)]
 
         if not chosen_call:
+            self._log_message("Skipping update")
             return False
 
+        self._log_message(f"Running update {chosen_call}")
         self.update_poll_id = self.preferred_node.update_queue.push(
             UpdateInfo(prev=self.prev.copy(), op=chosen_call, front_end_id=self.id)
         )
@@ -435,6 +462,7 @@ class FrontEnd:
         return True
 
     def poll_for_update(self) -> bool:
+        self._log_message("Polling for update result")
         self.poll_attempts += 1
         if self.poll_attempts > self.max_poll_attempts:
             self.stats["failed_polls"] += 1
@@ -451,14 +479,17 @@ class FrontEnd:
         return False
 
     def query_val(self) -> None:
+        self._log_message("Running query")
         self.stats["query_starts"] += 1
         self.query_poll_id = self.preferred_node.query_queue.push(
             QueryInfo(prev=self.prev, front_end_id=self.id)
         )
 
     def poll_for_val(self) -> bool:
+        self._log_message("Polling for query result")
         self.poll_attempts += 1
         if self.poll_attempts > self.max_poll_attempts:
+            self._log_message("Failed to poll for query result")
             self.stats["failed_polls"] += 1
             self._clear_poll_state()
             return False
@@ -466,6 +497,7 @@ class FrontEnd:
         for id, qres in self.preferred_node.query_results:
             if self.query_poll_id == id:
                 self.seen_vals.append(deepcopy(qres.val))
+                self._log_message(f"Received value of query: {qres.val}")
                 self.prev = qres.ts.copy()
                 self.preferred_node.ack_query_result(self.query_poll_id)
                 self.stats["query_completes"] += 1
@@ -577,5 +609,5 @@ if __name__ == "__main__":
         id = node.id
         node.other_nodes = [x for x in nodes if x.id != id]
     cluster = Cluster(nodes=nodes, front_ends=front_ends)
-    cluster.run(5)
+    cluster.run(10)
     cluster.summarize()
