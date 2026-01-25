@@ -8,42 +8,71 @@ python3 node.py
 ```
 
 ## Overview
-
 Original paper: https://www.cs.princeton.edu/courses/archive/spr24/cos418/papers/lazy.pdf
 
 This repo contains a simulated version of the paper "Providing high availability
 using lazy replication" by Ladin et al. (1992). The goal is only to help me
-learn about the system proposed in the paper and to try to implement it myself.
+learn about the system proposed in the paper and to try to implement it myself,
+and more broadly to start building an intuition for vector clocks for dependency
+tracking.
 
 The paper describes a distributed system of replicated servers with eventual
-consistency through _causal_ relationships between events. Each client node sees
-a consistent view of the system (read-your-writes, preserved session order,
-etc.). This is done through the use of vector clocks. The idea with vector
-clocks is that each server node keeps track of all other nodes in the system and
-how many updates they've processed. Vector clocks are vectors of monotonically
-increasing integers, where `x[i]` represents the number of operations processed
-at server `i`.
+consistency through _causal_ relationships between events. The system is
+composed of front end code at each client that interacts with any of a set of
+replicas. Replicas are symmetric; there is no master. The client makes updates
+and occasionally observes the system through queries.
 
-The article does a better job explaining vector clocks concisely than I can. But
-a few interesting bits to note. In the Ladin et al. system, there are a number
-of vector clocks in play.
+The replication strategy guarantees that the client sees a causally consistent
+view of the system regardless of which replica it talks to. If the client makes
+an update, it expects to see that update in all future queries. If the client
+makes a query, it expects its following updates to take place "after" the view
+of the system according to the query. In other words, the client may not see the
+most up-to-date view of the system, but time never goes backwards.
+
+Nothing is guaranteed about how quickly updates will propogate through the
+system. In the event of a network partition, it's possible for a client to
+interact with a replica for a long time without receiving updates from any other
+client or replica. But the front end may change replicas, and a query on the new
+replica will trigger the replica to wait for (or seek out) gossip about what the
+user did and saw with their previous replica.
+
+The system guarantees that the client will see a causally consistent view of the
+system, not an up-to-date view. This is more useful in some contexts than
+others. The example given in the paper is a mail client, where you don't
+necessarily need the most up to date view, but you expect emails you send to be
+in your "Sent" mailbox.
+
+Gossip messages are exchanged between replicas to ensure all replicas make
+progress towards consistency. WIth no updates, it's practically guaranteed that
+all replicas agree on the state of the system.
+
+Causality is ensured through the use of vector clocks for dependency tracking.
+Vector clocks represent the set of updates applied to some data `val`; put
+differently, they represent exactly one state of the system. In practice, a
+vector clock is an array of monotonically increasing integers, where `ts[i]`
+represents the number of updates applied at replica `i`.
+
+In the Ladin et al. system, there are a number of vector clocks.
 
 - `rep_ts` is the "time" as this server node understands it. This timestamp
   represents all of the events that it knows about personally via direct actions
-from the user and gossip messages.
+from the user and gossip messages. It applies updates in dependency order, and
+it may not immediately apply all updates it receives.
 - `val_ts` is the set of events that have contributed to the data (the "value").
   This is updated when the value is modified either by a user or by applying
-events received via gossip. The relationship between `rep_ts` and `val_ts` is
-subtle.
+events received via gossip. Where `rep_ts` represents the updates that the
+replica knows about, `val_ts` represents the updates that have actually been
+applied to `val`.
 - `ts_table` contains various `rep_ts` values for each node in the cluster, so
   that `ts_table[i]` is equal to the latest timestamp from server `i` that was
 received by the current server via gossip. It's used to decide when a change is
 "known everywhere".
-- The client maintains its own timestamp to represent its understanding of the
-  system, and consequently the changes that it expects to have already taken
-effect when it makes requests. So, if a client sends an update to server node
-`i` and then queries server node `j`, the latter will see that this client
-expects to see changes made at `i` in the query result.
+- The client (ie a user who makes queries and updates) maintains its own
+  timestamp to represent its understanding of the system, and consequently the
+changes that it expects to have already taken effect when it makes requests. So,
+if a client sends an update to server node `i` and then queries server node `j`,
+the latter will see that this client expects to see changes made at `i` in the
+query result.
 
 The most basic version of the system is composed of simple, CRDT operations
 applied with causality restrictions. The paper also develops stricter operation
@@ -57,7 +86,7 @@ the system.
 - **Immediate operations** are performed in the same order at all replicas
   relative to all events in the system.
 
-I have not developed these last two, more interesting operation types, only
+I have not developed these last two more interesting operation types, only
 causal operations.
 
 ## Python environment
@@ -95,24 +124,22 @@ timestamp.
   requesting it.
 - The simulated communication environment is a little too synthetic in my
   opinion.
+- I'm using a CRDT update operation (running total), so I haven't worried as
+  much about the order in which updates are applied. Normally, this matters.
+- I haven't faked the whole architecture. There are no clients, just front ends
+  and replicas. The client/front end boundary isn't that interesting (the front
+end hides replication and timestamp management from the client), so I dropped
+it.
 
-I have a bug or two left in the code -- I've been hacking on it in my free time,
-so I haven't been the _most_ careful with some implementation details. But I'm
-not sure where my issue is. It was occasionally wrong before I added log cleanup
-(removing log records that are known everywhere). After I added log cleanup, the
-answers are even worse than ever. The good news is that it's wrong even when
-there are just 2 nodes and 5 ticks, so it's only a matter of time before I
-figure out what boneheaded mistake I made.
+I've recently fixed a few bugs, and now the replicas always agree at the end (as
+expected). There may be some other sorting bugs, but like I said, this doesn't
+matter with the running total service.
 
 ## Configuration
-How do you tweak the system? There are a few levers. First, you can change the
-number of clients and servers, or the number of ticks. More interestingly, you
-can choose the ratio of queries to updates that each front end makes, and when
-the front end decides to move to another server.
-
-Each server also has a configurable likelihood that they will miss gossip
-messages during this tick, which makes the system more interesting and a little
-less predictable and lock-step.
+There are a few levers. First, you can change the number of clients and servers,
+or the number of ticks. More interestingly, you can choose the ratio of queries
+to updates that each front end makes, and when the front end decides to move to
+another server.
 
 There's no central config, that's a to-do. If you're interested in the system,
 you'll just have to read the code.
