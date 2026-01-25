@@ -19,3 +19,8 @@ class Totaler:
 
     def subtract(self, other: int) -> None:
         self.val -= other
+
+    def copy(self) -> "Totaler":
+        out = Totaler()
+        out.val = self.val
+        return out

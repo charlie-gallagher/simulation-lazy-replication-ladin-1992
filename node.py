@@ -153,11 +153,11 @@ class Node:
     # Identifies the node
     id: int
     log: List[Record]
-    # Maintains knowledge of what updates this node has applied
+    # Maintains knowledge of what updates this node has seen
     rep_ts: MultiPartTimestamp
     # Value that is updated
     val: Totaler
-    # Timestamp of the value, not necessarily related to rep_ts
+    # Maintains knowledge of updates that have actually been applied
     val_ts: MultiPartTimestamp
     # List of CIDs for deduplication purposes
     inval: List[Any]
@@ -207,8 +207,8 @@ class Node:
         print(f"  Stats: {self.stats}")
 
     def clear_update_queue(self) -> None:
-        # Set to an initial value that will never match len(update_queue)
         self._log_message(f"Clearing update queue ({len(self.update_queue)})")
+        # Set to an initial value that will never match len(update_queue)
         prev_uq_len = -1
         while True:
             if len(self.update_queue) == 0:
@@ -230,15 +230,6 @@ class Node:
             self._log_message(
                 f"Update: (fid: {update_info.front_end_id}, nid: {self.id}) f.prev: {update_info.prev} vs val.prev {self.val_ts}"
             )
-            if not update_info.prev <= self.val_ts:
-                self._log_message("Update can't be applied! Need more gossip")
-                self.update_queue.push(update_info, uid)
-                continue
-
-            self._log_message(f"Processing update message {update_info}")
-            op = op_map[update_info.op.name]
-            kwargs = update_info.op.args or {}
-            op(**kwargs)
 
             # Increment self timestamp
             self.rep_ts.incr(self.id)
@@ -252,8 +243,18 @@ class Node:
             # Create a record and save it in the log
             self.log.append(Record(msg=update_info, rnode=self.id, ts=rec_ts))
 
-            # Set the timestamp for the value by merging u.prev and val_ts
-            self.val_ts = self.val_ts.merge(rec_ts)
+            # Decide whether to apply update or not
+            if not update_info.prev <= self.val_ts:
+                self._log_message(f"Update can't be applied! Need more gossip {update_info}")
+                raise NotImplementedError("Haven't implemented deferring log messages")
+            else:
+                self._log_message(f"Applying update message {update_info}")
+                # Apply to val
+                op = op_map[update_info.op.name]
+                kwargs = update_info.op.args or {}
+                op(**kwargs)
+                # Set the timestamp for the value by merging u.prev and val_ts
+                self.val_ts = self.val_ts.merge(rec_ts)
 
             # Finally, add the new timestamp to the update result list
             self.update_results.append((uid, rec_ts.copy()))
@@ -281,7 +282,7 @@ class Node:
             )
             if query_info.prev <= self.val_ts:
                 self.query_results.append(
-                    (uid, QueryResult(val=self.val, ts=self.val_ts.copy()))
+                    (uid, QueryResult(val=self.val.copy(), ts=self.val_ts.copy()))
                 )
                 self.stats["queries"] += 1
             else:
@@ -312,10 +313,6 @@ class Node:
             "incr": self.val.incr,
             "decr": self.val.decr,
         }
-        # Randomly ignore all gossip for a round, to make it interesting
-        if random.randint(0, 1) == 2:
-            self._log_message("After gossip (returned early!)")
-            return
         while True:
             if len(self.gossip_queue) == 0:
                 self._log_message("No more gossip messages")
@@ -323,21 +320,22 @@ class Node:
             msg = self.gossip_queue.lpop()
 
             if msg.src_ts <= self.ts_table[msg.src]:
+                self._log_message("Discarding gossip message, already have these updates")
                 continue
 
             if msg.src == self.id:
                 continue
 
-            # Update ts_table
-            self.ts_table[msg.src] = msg.src_ts
+            # Find new log records
+            new_records = [x for x in msg.records if not (x.ts <= self.rep_ts)]
+            self.log.extend(deepcopy(new_records))
 
             # Merge timestamp into rep_ts
             self.rep_ts = self.rep_ts.merge(msg.src_ts)
             self.ts_table[self.id] = self.rep_ts.copy()
 
-            # Find new log records
-            new_records = [x for x in msg.records if x not in self.log]
-            self.log.extend(deepcopy(new_records))
+            # Update ts_table
+            self.ts_table[msg.src] = msg.src_ts.copy()
 
             self.stats["gossip_messages_processed"] += 1
 
@@ -354,7 +352,7 @@ class Node:
 
     def trim_log(self) -> int:
         """Trim log and report on number of entries removed"""
-        self._log_message("Trimming log")
+        self._log_message(f"Trimming log ({len(self.log)})")
         to_remove = []
         for i, r in enumerate(self.log):
             # This node can be confident that all other nodes have this
@@ -567,6 +565,11 @@ class Cluster:
         for be in self.nodes:
             be.clear_gossip_queue()
             be.trim_log()
+        for be in self.nodes:
+            be.send_gossip()
+        for be in self.nodes:
+            be.clear_gossip_queue()
+            be.trim_log()
 
 
 # Runtime stuff ------------------------------------------------------
@@ -600,8 +603,8 @@ def _generate_front_ends(n: int):
 
 
 if __name__ == "__main__":
-    nodes = _generate_nodes(2)
-    front_ends = _generate_front_ends(1)
+    nodes = _generate_nodes(4)
+    front_ends = _generate_front_ends(25)
     # Tell FEs and nodes about other nodes
     for fe in front_ends:
         fe.nodes = nodes
@@ -609,5 +612,5 @@ if __name__ == "__main__":
         id = node.id
         node.other_nodes = [x for x in nodes if x.id != id]
     cluster = Cluster(nodes=nodes, front_ends=front_ends)
-    cluster.run(10)
+    cluster.run(100)
     cluster.summarize()
