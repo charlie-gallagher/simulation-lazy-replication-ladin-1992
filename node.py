@@ -5,6 +5,8 @@ import random
 from copy import deepcopy
 from typing import List, Tuple, Any
 
+DEBUG = False
+
 
 @dataclasses.dataclass
 class ProcedureCall:
@@ -185,7 +187,9 @@ class Node:
         }
 
     def _log_message(self, msg: str) -> None:
-        print(f"Node {self.id} :: {msg}")
+        global DEBUG
+        if DEBUG:
+            print(f"Node {self.id} :: {msg}")
 
     def summarize(self) -> None:
         print(f"Node ({self.id})")
@@ -480,7 +484,9 @@ class FrontEnd:
         return self.seen_vals[-1] if self.seen_vals else None
 
     def _log_message(self, msg: str) -> None:
-        print(f"Front end {self.id} :: {msg}")
+        global DEBUG
+        if DEBUG:
+            print(f"Front end {self.id} :: {msg}")
 
     def summarize(self) -> None:
         print(f"FrontEnd ({self.id})")
