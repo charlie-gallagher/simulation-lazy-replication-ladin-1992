@@ -245,8 +245,9 @@ class Node:
 
             # Decide whether to apply update or not
             if not update_info.prev <= self.val_ts:
-                self._log_message(f"Update can't be applied! Need more gossip {update_info}")
-                raise NotImplementedError("Haven't implemented deferring log messages")
+                self._log_message(
+                    f"Update can't be applied! Need more gossip {update_info.prev} <= {self.val_ts}"
+                )
             else:
                 self._log_message(f"Applying update message {update_info}")
                 # Apply to val
@@ -314,13 +315,18 @@ class Node:
             "decr": self.val.decr,
         }
         while True:
+            self._log_message(
+                f"Clearing gossip queue, my timestamp is now {self.rep_ts}"
+            )
             if len(self.gossip_queue) == 0:
                 self._log_message("No more gossip messages")
                 break
             msg = self.gossip_queue.lpop()
 
             if msg.src_ts <= self.ts_table[msg.src]:
-                self._log_message("Discarding gossip message, already have these updates")
+                self._log_message(
+                    f"Discarding gossip message, already have these updates ({msg.src_ts} <= {self.ts_table[msg.src]})"
+                )
                 continue
 
             if msg.src == self.id:
@@ -328,6 +334,10 @@ class Node:
 
             # Find new log records
             new_records = [x for x in msg.records if not (x.ts <= self.rep_ts)]
+            old_records = [x for x in msg.records if x.ts <= self.rep_ts]
+            self._log_message(
+                f"Found {len(new_records)} new records, {len(old_records)} old records -- message timestamp {msg.src_ts}"
+            )
             self.log.extend(deepcopy(new_records))
 
             # Merge timestamp into rep_ts
@@ -342,12 +352,14 @@ class Node:
             # For each log record, apply the transformation
             # TODO: make this a packaged operation
             for r in new_records:
-                # _Technically_ I'm supposed to sort these, but I don't think it's required?
                 umsg = r.msg
                 op = op_map[umsg.op.name]
                 kwargs = umsg.op.args or {}
                 op(**kwargs)
-                self.val_ts = self.val_ts.merge(umsg.prev)
+                self._log_message(
+                    f"Merging {self.val_ts} with {r.ts} -> {self.val_ts.merge(r.ts)}"
+                )
+                self.val_ts = self.val_ts.merge(r.ts)
                 self.stats["gossip_updates_processed"] += 1
 
     def trim_log(self) -> int:
@@ -372,6 +384,62 @@ class Node:
         for i in reversed(to_remove):
             self.log.pop(i)
         return len(to_remove)
+
+    def clean_log(self) -> None:
+        """
+        Go through log and apply any messages that have not yet been applied that can be applied.
+
+        This is not well spec'd in the original paper, so I'm going to do my
+        best to follow their logic.
+        """
+        if self.val_ts == self.rep_ts:
+            return
+        assert self.val_ts < self.rep_ts, "val_ts not less than or equal to rep_ts"
+
+        # If r.prev <= self.rep_ts, then the message will already have been applied
+        comp = [
+            r
+            for r in self.log
+            if isinstance(r.msg, UpdateInfo) and r.msg.prev <= self.rep_ts
+        ]
+
+        # Sort comp
+        # The paper recommends selecting a record r from comp such that there
+        # exists no other record r_other such that r_other.ts <= r.op.prev
+        # We can sort such that when comparing A and B, A is earlier than B if
+        # A.ts <= B.prev.
+        # Really not sure what an efficient way of doing this is. To the dumb
+        # way, then!
+        if len(comp) == 0:
+            self._log_message("Did not find any messages in log that haven't yet been applied")
+            return
+
+        op_map = {
+            "add": self.val.add,
+            "subtract": self.val.subtract,
+            "incr": self.val.incr,
+            "decr": self.val.decr,
+        }
+        self._log_message(f"Found {len(comp)} messages in log to apply")
+        while True:
+            to_apply = None
+            for r in comp:
+                nopes = [s for s in comp if s != r and s.ts <= r.msg.prev]
+                if not nopes:
+                    to_apply = r
+                    break
+            if not to_apply:
+                self._log_message("No more messages in log can be applied")
+                return
+            # Remove from comp
+            comp = [x for x in comp if x != r]
+            self._log_message("Got one! Found a log message that needs to be applied")
+            # Apply to val
+            op = op_map[r.msg.op.name]
+            kwargs = r.msg.op.args or {}
+            op(**kwargs)
+            self.val_ts = self.val_ts.merge(r.msg.prev)
+            self.stats["updates"] += 1
 
 
 class FrontEnd:
@@ -410,7 +478,7 @@ class FrontEnd:
     @property
     def last_seen_val(self) -> Totaler:
         return self.seen_vals[-1] if self.seen_vals else None
-    
+
     def _log_message(self, msg: str) -> None:
         print(f"Front end {self.id} :: {msg}")
 
@@ -554,6 +622,7 @@ class Cluster:
                         fe.query_val()
             for be in self.nodes:
                 be.clear_gossip_queue()
+                be.clean_log()
                 be.clear_update_queue()
                 be.clear_query_queue()
                 be.send_gossip()
@@ -604,7 +673,7 @@ def _generate_front_ends(n: int):
 
 if __name__ == "__main__":
     nodes = _generate_nodes(4)
-    front_ends = _generate_front_ends(25)
+    front_ends = _generate_front_ends(10)
     # Tell FEs and nodes about other nodes
     for fe in front_ends:
         fe.nodes = nodes
